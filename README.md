@@ -5,16 +5,25 @@ Ingress to Gateway converter step by step.
 
 ## Current step
 
-Step 1 through step 4:
+Step 1 through step 7:
 
 - load Kubernetes client configuration from the local environment
 - create a controller-runtime client
 - list raw `Ingress` resources from the cluster
 - filter the raw list down to ALB-backed `Ingress` objects
 - load the filtered ALB ingresses into provider storage
+- convert stored ALB ingresses into a tiny intermediate representation
+- render a small human-readable summary of the generated model
+
+Current IR shape:
+
+- `Model`
+- `Gateway`
+- `HTTPRoute`
+- link back to the source `Ingress`
 
 Not implemented yet:
 
-- intermediate representation
-- Gateway API conversion
+- real Gateway API objects
 - YAML output
+- richer field mapping from `Ingress` rules into routes and listeners

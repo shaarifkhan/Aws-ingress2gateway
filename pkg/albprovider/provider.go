@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"aws-ingress2gateway/pkg/albir"
 	"aws-ingress2gateway/pkg/albreader"
 )
 
@@ -35,6 +36,16 @@ func (p *Provider) LoadFromCluster(ctx context.Context, namespace string) error 
 	p.storage.AddIngresses(albIngresses)
 
 	return nil
+}
+
+// BuildModel converts the provider's stored ALB ingresses into the tiny IR model.
+func (p *Provider) BuildModel() albir.Model {
+	return albir.ConvertIngresses(p.storage.ListIngresses())
+}
+
+// BuildSummary renders a small human-readable view of the current model.
+func (p *Provider) BuildSummary() string {
+	return albir.RenderSummary(p.BuildModel())
 }
 
 // Storage returns the provider's current in-memory state.
