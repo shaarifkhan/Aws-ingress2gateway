@@ -1,27 +1,47 @@
 package albir
 
-import networkingv1 "k8s.io/api/networking/v1"
+import (
+	"encoding/json"
+	"strconv"
+	"strings"
+
+	networkingv1 "k8s.io/api/networking/v1"
+)
+
+const ALBListenPortsAnnotation = "alb.ingress.kubernetes.io/listen-ports"
+
+type listenerConfig struct {
+	Protocol string
+	Port     int32
+}
 
 // ConvertIngress builds the smallest useful IR from one ALB-backed Ingress.
 // It does not validate ALB-specific behavior yet; it only preserves identity
 // and a link back to the source object for later conversion steps.
 func ConvertIngress(ingress networkingv1.Ingress) Model {
 	ingressCopy := ingress
+	hostnames := collectHostnames(ingress)
+	listeners := collectListeners(ingress, hostnames)
+	httpRoute := HTTPRoute{
+		Name:       ingress.Name,
+		Namespace:  ingress.Namespace,
+		Hostnames:  hostnames,
+		ParentRefs: collectParentRefs(ingress, listeners),
+		Rules:      collectRouteRules(ingress),
+		Source:     &ingressCopy,
+	}
 
 	return Model{
 		Gateways: []Gateway{
 			{
 				Name:      ingress.Name,
 				Namespace: ingress.Namespace,
+				Listeners: listeners,
 				Source:    &ingressCopy,
 			},
 		},
 		HTTPRoutes: []HTTPRoute{
-			{
-				Name:      ingress.Name,
-				Namespace: ingress.Namespace,
-				Source:    &ingressCopy,
-			},
+			httpRoute,
 		},
 	}
 }
@@ -40,4 +60,218 @@ func ConvertIngresses(ingresses []networkingv1.Ingress) Model {
 	}
 
 	return model
+}
+
+func collectParentRefs(ingress networkingv1.Ingress, listeners []Listener) []ParentRef {
+	parentRefs := make([]ParentRef, 0, len(listeners))
+
+	for _, listener := range listeners {
+		parentRefs = append(parentRefs, ParentRef{
+			GatewayName: ingress.Name,
+			SectionName: listener.Name,
+			Namespace:   ingress.Namespace,
+		})
+	}
+
+	return parentRefs
+}
+
+func collectListeners(ingress networkingv1.Ingress, hostnames []string) []Listener {
+	configs := collectListenerConfigs(ingress)
+
+	if len(hostnames) == 0 {
+		listeners := make([]Listener, 0, len(configs))
+		indexes := map[string]int{}
+
+		for _, config := range configs {
+			prefix := strings.ToLower(config.Protocol)
+			listeners = append(listeners, Listener{
+				Name:     listenerName(prefix, indexes[prefix]),
+				Port:     config.Port,
+				Protocol: config.Protocol,
+			})
+			indexes[prefix]++
+		}
+
+		return listeners
+	}
+
+	listeners := make([]Listener, 0, len(hostnames)*len(configs))
+	indexes := map[string]int{}
+
+	for _, hostname := range hostnames {
+		for _, config := range configs {
+			if !listenerConfigAppliesToHostname(ingress, hostname, config) {
+				continue
+			}
+
+			prefix := strings.ToLower(config.Protocol)
+			listeners = append(listeners, Listener{
+				Name:     listenerName(prefix, indexes[prefix]),
+				Port:     config.Port,
+				Protocol: config.Protocol,
+				Hostname: hostname,
+			})
+			indexes[prefix]++
+		}
+	}
+
+	return listeners
+}
+
+func listenerName(prefix string, index int) string {
+	if index == 0 {
+		return prefix
+	}
+
+	return prefix + "-" + strconv.Itoa(index+1)
+}
+
+func collectHostnames(ingress networkingv1.Ingress) []string {
+	hostnames := make([]string, 0, len(ingress.Spec.Rules))
+	seen := make(map[string]struct{}, len(ingress.Spec.Rules))
+
+	for _, rule := range ingress.Spec.Rules {
+		if rule.Host == "" {
+			continue
+		}
+		if _, ok := seen[rule.Host]; ok {
+			continue
+		}
+
+		hostnames = append(hostnames, rule.Host)
+		seen[rule.Host] = struct{}{}
+	}
+
+	return hostnames
+}
+
+func collectListenerConfigs(ingress networkingv1.Ingress) []listenerConfig {
+	configs, ok := parseListenPortsAnnotation(ingress.Annotations[ALBListenPortsAnnotation])
+	if ok && len(configs) > 0 {
+		return configs
+	}
+
+	return defaultListenerConfigs(ingress)
+}
+
+func parseListenPortsAnnotation(value string) ([]listenerConfig, bool) {
+	if value == "" {
+		return nil, false
+	}
+
+	var raw []map[string]int32
+	if err := json.Unmarshal([]byte(value), &raw); err != nil {
+		return nil, false
+	}
+
+	configs := make([]listenerConfig, 0, len(raw))
+	for _, entry := range raw {
+		for protocol, port := range entry {
+			normalized := strings.ToUpper(protocol)
+			if port <= 0 {
+				continue
+			}
+			if normalized != "HTTP" && normalized != "HTTPS" {
+				continue
+			}
+
+			configs = append(configs, listenerConfig{
+				Protocol: normalized,
+				Port:     port,
+			})
+		}
+	}
+
+	return configs, true
+}
+
+func collectTLSHosts(ingress networkingv1.Ingress) map[string]struct{} {
+	tlsHosts := make(map[string]struct{})
+
+	for _, tls := range ingress.Spec.TLS {
+		for _, host := range tls.Hosts {
+			if host == "" {
+				continue
+			}
+			tlsHosts[host] = struct{}{}
+		}
+	}
+
+	return tlsHosts
+}
+
+func defaultListenerConfigs(ingress networkingv1.Ingress) []listenerConfig {
+	configs := []listenerConfig{
+		{
+			Protocol: "HTTP",
+			Port:     80,
+		},
+	}
+
+	if len(ingress.Spec.TLS) > 0 {
+		configs = append(configs, listenerConfig{
+			Protocol: "HTTPS",
+			Port:     443,
+		})
+	}
+
+	return configs
+}
+
+func listenerConfigAppliesToHostname(ingress networkingv1.Ingress, hostname string, config listenerConfig) bool {
+	if config.Protocol != "HTTPS" {
+		return true
+	}
+
+	tlsHosts := collectTLSHosts(ingress)
+	return tlsAppliesToHostname(hostname, tlsHosts, len(ingress.Spec.TLS) > 0)
+}
+
+func tlsAppliesToHostname(hostname string, tlsHosts map[string]struct{}, hasTLSConfig bool) bool {
+	if !hasTLSConfig {
+		return false
+	}
+
+	if len(tlsHosts) == 0 {
+		return true
+	}
+
+	_, ok := tlsHosts[hostname]
+	return ok
+}
+
+func collectRouteRules(ingress networkingv1.Ingress) []HTTPRouteRule {
+	rules := make([]HTTPRouteRule, 0)
+
+	for _, ingressRule := range ingress.Spec.Rules {
+		if ingressRule.HTTP == nil {
+			continue
+		}
+
+		for _, path := range ingressRule.HTTP.Paths {
+			rule := HTTPRouteRule{
+				Path:        path.Path,
+				PathType:    path.PathType,
+				BackendRefs: collectBackendRefs(path.Backend),
+			}
+			rules = append(rules, rule)
+		}
+	}
+
+	return rules
+}
+
+func collectBackendRefs(backend networkingv1.IngressBackend) []BackendRef {
+	if backend.Service == nil {
+		return nil
+	}
+
+	return []BackendRef{
+		{
+			Name:       backend.Service.Name,
+			PortNumber: backend.Service.Port.Number,
+			PortName:   backend.Service.Port.Name,
+		},
+	}
 }

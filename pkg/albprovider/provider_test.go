@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func TestBuildModel(t *testing.T) {
@@ -87,11 +87,19 @@ func TestBuildSummary(t *testing.T) {
 		t.Fatal("expected summary to include httpRoutes header")
 	}
 
-	if !strings.Contains(summary, "- default/demo-one\n") {
-		t.Fatal("expected summary to include first ingress identity")
+	if !strings.Contains(summary, "- default/demo-one listeners=1\n") {
+		t.Fatal("expected summary to include first gateway")
 	}
 
-	if !strings.Contains(summary, "- apps/demo-two\n") {
-		t.Fatal("expected summary to include second ingress identity")
+	if !strings.Contains(summary, "- apps/demo-two listeners=1\n") {
+		t.Fatal("expected summary to include second gateway")
+	}
+
+	if !strings.Contains(summary, "- default/demo-one hosts= parents=default/demo-one#http rules=0\n") {
+		t.Fatal("expected summary to include first http route")
+	}
+
+	if !strings.Contains(summary, "- apps/demo-two hosts= parents=apps/demo-two#http rules=0\n") {
+		t.Fatal("expected summary to include second http route")
 	}
 }

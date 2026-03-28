@@ -5,7 +5,7 @@ Ingress to Gateway converter step by step.
 
 ## Current step
 
-Step 1 through step 7:
+Step 1 through step 11:
 
 - load Kubernetes client configuration from the local environment
 - create a controller-runtime client
@@ -14,16 +14,29 @@ Step 1 through step 7:
 - load the filtered ALB ingresses into provider storage
 - convert stored ALB ingresses into a tiny intermediate representation
 - render a small human-readable summary of the generated model
+- copy basic host, path, and backend service data from `Ingress` rules into the IR
+- derive tiny gateway listeners from ingress hostnames
+- link each generated route back to its generated gateway listeners
+- distinguish basic HTTP and HTTPS listeners from ingress TLS configuration
 
 Current IR shape:
 
 - `Model`
 - `Gateway`
+- `Listener`
 - `HTTPRoute`
+- `ParentRef`
+- `HTTPRouteRule`
+- `BackendRef`
 - link back to the source `Ingress`
+- basic HTTP listener data on the gateway side
+- basic HTTPS listener data when ingress TLS is present
+- route parent references to generated gateway listener sections
+- hostname, path, and backend service details from `Ingress.Spec.Rules`
 
 Not implemented yet:
 
 - real Gateway API objects
 - YAML output
-- richer field mapping from `Ingress` rules into routes and listeners
+- richer listener and route mapping behavior beyond basic HTTP/HTTPS extraction
+- default backend handling and more advanced ALB-specific annotations
