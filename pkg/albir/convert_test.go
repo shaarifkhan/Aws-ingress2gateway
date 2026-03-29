@@ -294,6 +294,54 @@ func TestConvertIngressUsesALBListenPortsAnnotation(t *testing.T) {
 	}
 }
 
+func TestConvertIngressUsesALBListenPortsAnnotationWithoutTLS(t *testing.T) {
+	pathType := networkingv1.PathTypePrefix
+	ingress := networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "demo",
+			Namespace: "default",
+			Annotations: map[string]string{
+				ALBListenPortsAnnotation: `[{"HTTP":8080},{"HTTPS":8443}]`,
+			},
+		},
+		Spec: networkingv1.IngressSpec{
+			Rules: []networkingv1.IngressRule{
+				{
+					Host: "demo.example.com",
+					IngressRuleValue: networkingv1.IngressRuleValue{
+						HTTP: &networkingv1.HTTPIngressRuleValue{
+							Paths: []networkingv1.HTTPIngressPath{
+								{
+									Path:     "/",
+									PathType: &pathType,
+									Backend: networkingv1.IngressBackend{
+										Service: &networkingv1.IngressServiceBackend{
+											Name: "demo-service",
+											Port: networkingv1.ServiceBackendPort{
+												Number: 80,
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	model := ConvertIngress(ingress)
+
+	if len(model.Gateways[0].Listeners) != 2 {
+		t.Fatalf("got %d listeners, want 2", len(model.Gateways[0].Listeners))
+	}
+
+	if model.Gateways[0].Listeners[1].Protocol != "HTTPS" || model.Gateways[0].Listeners[1].Port != 8443 {
+		t.Fatalf("second listener = %#v, want HTTPS:8443", model.Gateways[0].Listeners[1])
+	}
+}
+
 func TestConvertIngressAddsCatchAllListenerWithoutHost(t *testing.T) {
 	pathType := networkingv1.PathTypePrefix
 	ingress := networkingv1.Ingress{

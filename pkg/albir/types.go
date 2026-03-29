@@ -14,6 +14,7 @@ type Model struct {
 type Gateway struct {
 	Name      string
 	Namespace string
+	Scheme    string
 	Listeners []Listener
 	Source    *networkingv1.Ingress
 }

@@ -78,6 +78,7 @@ func collectParentRefs(ingress networkingv1.Ingress, listeners []Listener) []Par
 
 func collectListeners(ingress networkingv1.Ingress, hostnames []string) []Listener {
 	configs := collectListenerConfigs(ingress)
+	hasExplicitListenPorts := ingress.Annotations[ALBListenPortsAnnotation] != ""
 
 	if len(hostnames) == 0 {
 		listeners := make([]Listener, 0, len(configs))
@@ -101,7 +102,7 @@ func collectListeners(ingress networkingv1.Ingress, hostnames []string) []Listen
 
 	for _, hostname := range hostnames {
 		for _, config := range configs {
-			if !listenerConfigAppliesToHostname(ingress, hostname, config) {
+			if !listenerConfigAppliesToHostname(ingress, hostname, config, hasExplicitListenPorts) {
 				continue
 			}
 
@@ -219,8 +220,12 @@ func defaultListenerConfigs(ingress networkingv1.Ingress) []listenerConfig {
 	return configs
 }
 
-func listenerConfigAppliesToHostname(ingress networkingv1.Ingress, hostname string, config listenerConfig) bool {
+func listenerConfigAppliesToHostname(ingress networkingv1.Ingress, hostname string, config listenerConfig, hasExplicitListenPorts bool) bool {
 	if config.Protocol != "HTTPS" {
+		return true
+	}
+
+	if hasExplicitListenPorts {
 		return true
 	}
 
