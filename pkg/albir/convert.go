@@ -9,6 +9,8 @@ import (
 )
 
 const ALBListenPortsAnnotation = "alb.ingress.kubernetes.io/listen-ports"
+const ALBSchemeAnnotation = "alb.ingress.kubernetes.io/scheme"
+const ALBTargetTypeAnnotation = "alb.ingress.kubernetes.io/target-type"
 
 type listenerConfig struct {
 	Protocol string
@@ -36,6 +38,7 @@ func ConvertIngress(ingress networkingv1.Ingress) Model {
 			{
 				Name:      ingress.Name,
 				Namespace: ingress.Namespace,
+				Scheme:    collectScheme(ingress),
 				Listeners: listeners,
 				Source:    &ingressCopy,
 			},
@@ -147,6 +150,18 @@ func collectHostnames(ingress networkingv1.Ingress) []string {
 	return hostnames
 }
 
+func collectScheme(ingress networkingv1.Ingress) string {
+	scheme := strings.TrimSpace(ingress.Annotations[ALBSchemeAnnotation])
+	switch strings.ToLower(scheme) {
+	case "internet-facing":
+		return "internet-facing"
+	case "internal":
+		return "internal"
+	default:
+		return ""
+	}
+}
+
 func collectListenerConfigs(ingress networkingv1.Ingress) []listenerConfig {
 	configs, ok := parseListenPortsAnnotation(ingress.Annotations[ALBListenPortsAnnotation])
 	if ok && len(configs) > 0 {
@@ -248,6 +263,7 @@ func tlsAppliesToHostname(hostname string, tlsHosts map[string]struct{}, hasTLSC
 
 func collectRouteRules(ingress networkingv1.Ingress) []HTTPRouteRule {
 	rules := make([]HTTPRouteRule, 0)
+	targetType := collectTargetType(ingress)
 
 	for _, ingressRule := range ingress.Spec.Rules {
 		if ingressRule.HTTP == nil {
@@ -258,7 +274,7 @@ func collectRouteRules(ingress networkingv1.Ingress) []HTTPRouteRule {
 			rule := HTTPRouteRule{
 				Path:        path.Path,
 				PathType:    path.PathType,
-				BackendRefs: collectBackendRefs(path.Backend),
+				BackendRefs: collectBackendRefs(path.Backend, targetType),
 			}
 			rules = append(rules, rule)
 		}
@@ -267,7 +283,19 @@ func collectRouteRules(ingress networkingv1.Ingress) []HTTPRouteRule {
 	return rules
 }
 
-func collectBackendRefs(backend networkingv1.IngressBackend) []BackendRef {
+func collectTargetType(ingress networkingv1.Ingress) string {
+	targetType := strings.TrimSpace(ingress.Annotations[ALBTargetTypeAnnotation])
+	switch strings.ToLower(targetType) {
+	case "instance":
+		return "instance"
+	case "ip":
+		return "ip"
+	default:
+		return ""
+	}
+}
+
+func collectBackendRefs(backend networkingv1.IngressBackend, targetType string) []BackendRef {
 	if backend.Service == nil {
 		return nil
 	}
@@ -277,6 +305,7 @@ func collectBackendRefs(backend networkingv1.IngressBackend) []BackendRef {
 			Name:       backend.Service.Name,
 			PortNumber: backend.Service.Port.Number,
 			PortName:   backend.Service.Port.Name,
+			TargetType: targetType,
 		},
 	}
 }

@@ -57,4 +57,5 @@ type BackendRef struct {
 	Name       string
 	PortNumber int32
 	PortName   string
+	TargetType string
 }

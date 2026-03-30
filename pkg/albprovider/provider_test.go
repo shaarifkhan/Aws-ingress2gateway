@@ -87,11 +87,11 @@ func TestBuildSummary(t *testing.T) {
 		t.Fatal("expected summary to include httpRoutes header")
 	}
 
-	if !strings.Contains(summary, "- default/demo-one listeners=1\n") {
+	if !strings.Contains(summary, "- default/demo-one scheme= listeners=1\n") {
 		t.Fatal("expected summary to include first gateway")
 	}
 
-	if !strings.Contains(summary, "- apps/demo-two listeners=1\n") {
+	if !strings.Contains(summary, "- apps/demo-two scheme= listeners=1\n") {
 		t.Fatal("expected summary to include second gateway")
 	}
 

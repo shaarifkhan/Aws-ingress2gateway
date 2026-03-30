@@ -13,6 +13,10 @@ func TestConvertIngress(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "demo",
 			Namespace: "default",
+			Annotations: map[string]string{
+				ALBSchemeAnnotation:     "internet-facing",
+				ALBTargetTypeAnnotation: "ip",
+			},
 		},
 		Spec: networkingv1.IngressSpec{
 			Rules: []networkingv1.IngressRule{
@@ -54,6 +58,10 @@ func TestConvertIngress(t *testing.T) {
 	gateway := model.Gateways[0]
 	if gateway.Name != ingress.Name || gateway.Namespace != ingress.Namespace {
 		t.Fatalf("gateway identity = %s/%s, want %s/%s", gateway.Namespace, gateway.Name, ingress.Namespace, ingress.Name)
+	}
+
+	if gateway.Scheme != "internet-facing" {
+		t.Fatalf("gateway scheme = %q, want internet-facing", gateway.Scheme)
 	}
 
 	if len(gateway.Listeners) != 1 {
@@ -102,6 +110,10 @@ func TestConvertIngress(t *testing.T) {
 	backendRef := route.Rules[0].BackendRefs[0]
 	if backendRef.Name != "demo-service" || backendRef.PortNumber != 80 {
 		t.Fatalf("backend ref = %#v, want demo-service:80", backendRef)
+	}
+
+	if backendRef.TargetType != "ip" {
+		t.Fatalf("backend target type = %q, want ip", backendRef.TargetType)
 	}
 
 	if gateway.Source == nil || route.Source == nil {
@@ -153,6 +165,146 @@ func TestConvertIngresses(t *testing.T) {
 
 	if model.Gateways[0].Source == nil || model.Gateways[1].Source == nil {
 		t.Fatal("expected gateway source ingress pointers to be set")
+	}
+}
+
+func TestConvertIngressCollectsInternalScheme(t *testing.T) {
+	ingress := networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "demo",
+			Namespace: "default",
+			Annotations: map[string]string{
+				ALBSchemeAnnotation: "internal",
+			},
+		},
+	}
+
+	model := ConvertIngress(ingress)
+
+	if len(model.Gateways) != 1 {
+		t.Fatalf("got %d gateways, want 1", len(model.Gateways))
+	}
+
+	if model.Gateways[0].Scheme != "internal" {
+		t.Fatalf("gateway scheme = %q, want internal", model.Gateways[0].Scheme)
+	}
+}
+
+func TestConvertIngressIgnoresUnknownScheme(t *testing.T) {
+	ingress := networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "demo",
+			Namespace: "default",
+			Annotations: map[string]string{
+				ALBSchemeAnnotation: "something-else",
+			},
+		},
+	}
+
+	model := ConvertIngress(ingress)
+
+	if len(model.Gateways) != 1 {
+		t.Fatalf("got %d gateways, want 1", len(model.Gateways))
+	}
+
+	if model.Gateways[0].Scheme != "" {
+		t.Fatalf("gateway scheme = %q, want empty string", model.Gateways[0].Scheme)
+	}
+}
+
+func TestConvertIngressCollectsInstanceTargetType(t *testing.T) {
+	pathType := networkingv1.PathTypePrefix
+	ingress := networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "demo",
+			Namespace: "default",
+			Annotations: map[string]string{
+				ALBTargetTypeAnnotation: "instance",
+			},
+		},
+		Spec: networkingv1.IngressSpec{
+			Rules: []networkingv1.IngressRule{
+				{
+					Host: "demo.example.com",
+					IngressRuleValue: networkingv1.IngressRuleValue{
+						HTTP: &networkingv1.HTTPIngressRuleValue{
+							Paths: []networkingv1.HTTPIngressPath{
+								{
+									Path:     "/",
+									PathType: &pathType,
+									Backend: networkingv1.IngressBackend{
+										Service: &networkingv1.IngressServiceBackend{
+											Name: "demo-service",
+											Port: networkingv1.ServiceBackendPort{
+												Number: 80,
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	model := ConvertIngress(ingress)
+
+	if len(model.HTTPRoutes) != 1 || len(model.HTTPRoutes[0].Rules) != 1 || len(model.HTTPRoutes[0].Rules[0].BackendRefs) != 1 {
+		t.Fatal("expected one backend ref in converted route")
+	}
+
+	if model.HTTPRoutes[0].Rules[0].BackendRefs[0].TargetType != "instance" {
+		t.Fatalf("backend target type = %q, want instance", model.HTTPRoutes[0].Rules[0].BackendRefs[0].TargetType)
+	}
+}
+
+func TestConvertIngressIgnoresUnknownTargetType(t *testing.T) {
+	pathType := networkingv1.PathTypePrefix
+	ingress := networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "demo",
+			Namespace: "default",
+			Annotations: map[string]string{
+				ALBTargetTypeAnnotation: "something-else",
+			},
+		},
+		Spec: networkingv1.IngressSpec{
+			Rules: []networkingv1.IngressRule{
+				{
+					Host: "demo.example.com",
+					IngressRuleValue: networkingv1.IngressRuleValue{
+						HTTP: &networkingv1.HTTPIngressRuleValue{
+							Paths: []networkingv1.HTTPIngressPath{
+								{
+									Path:     "/",
+									PathType: &pathType,
+									Backend: networkingv1.IngressBackend{
+										Service: &networkingv1.IngressServiceBackend{
+											Name: "demo-service",
+											Port: networkingv1.ServiceBackendPort{
+												Number: 80,
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	model := ConvertIngress(ingress)
+
+	if len(model.HTTPRoutes) != 1 || len(model.HTTPRoutes[0].Rules) != 1 || len(model.HTTPRoutes[0].Rules[0].BackendRefs) != 1 {
+		t.Fatal("expected one backend ref in converted route")
+	}
+
+	if model.HTTPRoutes[0].Rules[0].BackendRefs[0].TargetType != "" {
+		t.Fatalf("backend target type = %q, want empty string", model.HTTPRoutes[0].Rules[0].BackendRefs[0].TargetType)
 	}
 }
 
@@ -517,6 +669,7 @@ func TestRenderSummary(t *testing.T) {
 			{
 				Name:      "demo-gateway",
 				Namespace: "default",
+				Scheme:    "internet-facing",
 				Listeners: []Listener{
 					{
 						Name:     "http",
@@ -554,7 +707,7 @@ func TestRenderSummary(t *testing.T) {
 					{
 						Path: "/",
 						BackendRefs: []BackendRef{
-							{Name: "demo-service", PortNumber: 80},
+							{Name: "demo-service", PortNumber: 80, TargetType: "ip"},
 						},
 					},
 				},
@@ -563,7 +716,7 @@ func TestRenderSummary(t *testing.T) {
 	}
 
 	got := RenderSummary(model)
-	want := "gateways:\n- default/demo-gateway listeners=2\n  listener=http protocol=HTTP port=80 hostname=demo.example.com\n  listener=https protocol=HTTPS port=443 hostname=demo.example.com\nhttpRoutes:\n- default/demo-route hosts=demo.example.com parents=default/demo-gateway#http,default/demo-gateway#https rules=1\n  path=/ backend=demo-service:80\n"
+	want := "gateways:\n- default/demo-gateway scheme=internet-facing listeners=2\n  listener=http protocol=HTTP port=80 hostname=demo.example.com\n  listener=https protocol=HTTPS port=443 hostname=demo.example.com\nhttpRoutes:\n- default/demo-route hosts=demo.example.com parents=default/demo-gateway#http,default/demo-gateway#https rules=1\n  path=/ backend=demo-service:80 targetType=ip\n"
 
 	if got != want {
 		t.Fatalf("render summary = %q, want %q", got, want)

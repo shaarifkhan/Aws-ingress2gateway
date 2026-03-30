@@ -11,7 +11,7 @@ func RenderSummary(model Model) string {
 
 	builder.WriteString("gateways:\n")
 	for _, gateway := range model.Gateways {
-		builder.WriteString(fmt.Sprintf("- %s/%s listeners=%d\n", gateway.Namespace, gateway.Name, len(gateway.Listeners)))
+		builder.WriteString(fmt.Sprintf("- %s/%s scheme=%s listeners=%d\n", gateway.Namespace, gateway.Name, gateway.Scheme, len(gateway.Listeners)))
 		for _, listener := range gateway.Listeners {
 			builder.WriteString(fmt.Sprintf("  listener=%s protocol=%s port=%d hostname=%s\n", listener.Name, listener.Protocol, listener.Port, listener.Hostname))
 		}
@@ -32,14 +32,21 @@ func renderBackendRefs(backendRefs []BackendRef) string {
 	parts := make([]string, 0, len(backendRefs))
 
 	for _, backendRef := range backendRefs {
+		var rendered string
 		switch {
 		case backendRef.PortName != "":
-			parts = append(parts, fmt.Sprintf("%s:%s", backendRef.Name, backendRef.PortName))
+			rendered = fmt.Sprintf("%s:%s", backendRef.Name, backendRef.PortName)
 		case backendRef.PortNumber != 0:
-			parts = append(parts, fmt.Sprintf("%s:%d", backendRef.Name, backendRef.PortNumber))
+			rendered = fmt.Sprintf("%s:%d", backendRef.Name, backendRef.PortNumber)
 		default:
-			parts = append(parts, backendRef.Name)
+			rendered = backendRef.Name
 		}
+
+		if backendRef.TargetType != "" {
+			rendered += " targetType=" + backendRef.TargetType
+		}
+
+		parts = append(parts, rendered)
 	}
 
 	return strings.Join(parts, ",")
