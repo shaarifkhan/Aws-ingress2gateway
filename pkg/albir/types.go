@@ -5,8 +5,9 @@ import networkingv1 "k8s.io/api/networking/v1"
 // Model is the small in-memory result of conversion work.
 // It intentionally holds only the core Gateway-shaped objects we need first.
 type Model struct {
-	Gateways   []Gateway
-	HTTPRoutes []HTTPRoute
+	Gateways                   []Gateway
+	HTTPRoutes                 []HTTPRoute
+	LoadBalancerConfigurations []LoadBalancerConfiguration
 }
 
 // Gateway is a minimal IR form for the gateway we plan to generate.
@@ -25,6 +26,25 @@ type Listener struct {
 	Port     int32
 	Protocol string
 	Hostname string
+}
+
+// LoadBalancerConfiguration is a small IR form for the AWS load balancer config
+// that sits alongside the generated Gateway.
+type LoadBalancerConfiguration struct {
+	Name             string
+	Namespace        string
+	LoadBalancerName string
+	Scheme           string
+	Listeners        []LoadBalancerListenerConfiguration
+	Source           *networkingv1.Ingress
+}
+
+// LoadBalancerListenerConfiguration is a minimal listener customization shape.
+type LoadBalancerListenerConfiguration struct {
+	Protocol     string
+	Port         int32
+	SSLPolicy    string
+	Certificates []string
 }
 
 // HTTPRoute is a minimal IR form for the route we plan to generate.
@@ -47,6 +67,7 @@ type ParentRef struct {
 
 // HTTPRouteRule is a small flattened view of one Ingress HTTP path rule.
 type HTTPRouteRule struct {
+	Hostname    string
 	Path        string
 	PathType    *networkingv1.PathType
 	BackendRefs []BackendRef

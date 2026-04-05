@@ -68,6 +68,7 @@ func TestConvertHTTPRoute(t *testing.T) {
 		Rules: []albir.HTTPRouteRule{
 			{
 				Path:     "/",
+				Hostname: "demo.example.com",
 				PathType: &pathType,
 				BackendRefs: []albir.BackendRef{
 					{
@@ -151,5 +152,60 @@ func TestConvertModel(t *testing.T) {
 
 	if len(resources.HTTPRoutes) != 1 {
 		t.Fatalf("got %d http routes, want 1", len(resources.HTTPRoutes))
+	}
+}
+
+func TestConvertModelSplitsHTTPRoutesByHostname(t *testing.T) {
+	pathType := networkingv1.PathTypePrefix
+	model := albir.Model{
+		HTTPRoutes: []albir.HTTPRoute{
+			{
+				Name:      "demo-route",
+				Namespace: "default",
+				ParentRefs: []albir.ParentRef{
+					{
+						GatewayName: "demo-gateway",
+						SectionName: "http",
+						Namespace:   "default",
+					},
+				},
+				Rules: []albir.HTTPRouteRule{
+					{
+						Hostname: "one.example.com",
+						Path:     "/one",
+						PathType: &pathType,
+						BackendRefs: []albir.BackendRef{
+							{Name: "svc-one", PortNumber: 80},
+						},
+					},
+					{
+						Hostname: "two.example.com",
+						Path:     "/two",
+						PathType: &pathType,
+						BackendRefs: []albir.BackendRef{
+							{Name: "svc-two", PortNumber: 80},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	resources := ConvertModel(model)
+
+	if len(resources.HTTPRoutes) != 2 {
+		t.Fatalf("got %d http routes, want 2", len(resources.HTTPRoutes))
+	}
+
+	if resources.HTTPRoutes[0].Name != "demo-route-one-example-com" {
+		t.Fatalf("first route name = %q, want demo-route-one-example-com", resources.HTTPRoutes[0].Name)
+	}
+
+	if len(resources.HTTPRoutes[0].Spec.Hostnames) != 1 || string(resources.HTTPRoutes[0].Spec.Hostnames[0]) != "one.example.com" {
+		t.Fatal("expected first route to keep only the first hostname")
+	}
+
+	if resources.HTTPRoutes[1].Name != "demo-route-two-example-com" {
+		t.Fatalf("second route name = %q, want demo-route-two-example-com", resources.HTTPRoutes[1].Name)
 	}
 }

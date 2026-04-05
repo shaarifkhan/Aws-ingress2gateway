@@ -25,6 +25,14 @@ func RenderSummary(model Model) string {
 		}
 	}
 
+	builder.WriteString("loadBalancerConfigurations:\n")
+	for _, config := range model.LoadBalancerConfigurations {
+		builder.WriteString(fmt.Sprintf("- %s/%s loadBalancerName=%s scheme=%s listeners=%d\n", config.Namespace, config.Name, config.LoadBalancerName, config.Scheme, len(config.Listeners)))
+		for _, listener := range config.Listeners {
+			builder.WriteString(fmt.Sprintf("  listener protocol=%s port=%d sslPolicy=%s certificates=%s\n", listener.Protocol, listener.Port, listener.SSLPolicy, strings.Join(listener.Certificates, ",")))
+		}
+	}
+
 	return builder.String()
 }
 

@@ -6,6 +6,7 @@ import (
 
 	"aws-ingress2gateway/pkg/albir"
 	"aws-ingress2gateway/pkg/albreader"
+	"aws-ingress2gateway/pkg/gatewayapi"
 )
 
 // Provider is a small orchestration layer for our AWS-specific flow.
@@ -46,6 +47,16 @@ func (p *Provider) BuildModel() albir.Model {
 // BuildSummary renders a small human-readable view of the current model.
 func (p *Provider) BuildSummary() string {
 	return albir.RenderSummary(p.BuildModel())
+}
+
+// BuildGatewayAPIResources converts the current model into typed Gateway API objects.
+func (p *Provider) BuildGatewayAPIResources() gatewayapi.Resources {
+	return gatewayapi.ConvertModel(p.BuildModel())
+}
+
+// BuildGatewayAPIYAML renders the provider state as Gateway API YAML.
+func (p *Provider) BuildGatewayAPIYAML() (string, error) {
+	return gatewayapi.RenderResourcesYAML(p.BuildGatewayAPIResources())
 }
 
 // Storage returns the provider's current in-memory state.

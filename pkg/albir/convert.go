@@ -11,6 +11,9 @@ import (
 const ALBListenPortsAnnotation = "alb.ingress.kubernetes.io/listen-ports"
 const ALBSchemeAnnotation = "alb.ingress.kubernetes.io/scheme"
 const ALBTargetTypeAnnotation = "alb.ingress.kubernetes.io/target-type"
+const ALBLoadBalancerNameAnnotation = "alb.ingress.kubernetes.io/load-balancer-name"
+const ALBCertificateARNAnnotation = "alb.ingress.kubernetes.io/certificate-arn"
+const ALBSSLPolicyAnnotation = "alb.ingress.kubernetes.io/ssl-policy"
 
 type listenerConfig struct {
 	Protocol string
@@ -24,6 +27,7 @@ func ConvertIngress(ingress networkingv1.Ingress) Model {
 	ingressCopy := ingress
 	hostnames := collectHostnames(ingress)
 	listeners := collectListeners(ingress, hostnames)
+	loadBalancerConfiguration := collectLoadBalancerConfiguration(ingress)
 	httpRoute := HTTPRoute{
 		Name:       ingress.Name,
 		Namespace:  ingress.Namespace,
@@ -33,7 +37,7 @@ func ConvertIngress(ingress networkingv1.Ingress) Model {
 		Source:     &ingressCopy,
 	}
 
-	return Model{
+	model := Model{
 		Gateways: []Gateway{
 			{
 				Name:      ingress.Name,
@@ -47,22 +51,96 @@ func ConvertIngress(ingress networkingv1.Ingress) Model {
 			httpRoute,
 		},
 	}
+
+	if loadBalancerConfiguration != nil {
+		model.LoadBalancerConfigurations = []LoadBalancerConfiguration{*loadBalancerConfiguration}
+	}
+
+	return model
 }
 
 // ConvertIngresses converts a slice of Ingress objects into one combined model.
 func ConvertIngresses(ingresses []networkingv1.Ingress) Model {
 	model := Model{
-		Gateways:   make([]Gateway, 0, len(ingresses)),
-		HTTPRoutes: make([]HTTPRoute, 0, len(ingresses)),
+		Gateways:                   make([]Gateway, 0, len(ingresses)),
+		HTTPRoutes:                 make([]HTTPRoute, 0, len(ingresses)),
+		LoadBalancerConfigurations: make([]LoadBalancerConfiguration, 0, len(ingresses)),
 	}
 
 	for _, ingress := range ingresses {
 		converted := ConvertIngress(ingress)
 		model.Gateways = append(model.Gateways, converted.Gateways...)
 		model.HTTPRoutes = append(model.HTTPRoutes, converted.HTTPRoutes...)
+		model.LoadBalancerConfigurations = append(model.LoadBalancerConfigurations, converted.LoadBalancerConfigurations...)
 	}
 
 	return model
+}
+
+func collectLoadBalancerConfiguration(ingress networkingv1.Ingress) *LoadBalancerConfiguration {
+	if !hasLoadBalancerConfigurationInput(ingress) {
+		return nil
+	}
+
+	ingressCopy := ingress
+	return &LoadBalancerConfiguration{
+		Name:             ingress.Name + "-lb-config",
+		Namespace:        ingress.Namespace,
+		LoadBalancerName: strings.TrimSpace(ingress.Annotations[ALBLoadBalancerNameAnnotation]),
+		Scheme:           collectScheme(ingress),
+		Listeners:        collectLoadBalancerListenerConfigurations(ingress),
+		Source:           &ingressCopy,
+	}
+}
+
+func hasLoadBalancerConfigurationInput(ingress networkingv1.Ingress) bool {
+	return strings.TrimSpace(ingress.Annotations[ALBLoadBalancerNameAnnotation]) != "" ||
+		strings.TrimSpace(ingress.Annotations[ALBSchemeAnnotation]) != "" ||
+		strings.TrimSpace(ingress.Annotations[ALBListenPortsAnnotation]) != "" ||
+		strings.TrimSpace(ingress.Annotations[ALBCertificateARNAnnotation]) != "" ||
+		strings.TrimSpace(ingress.Annotations[ALBSSLPolicyAnnotation]) != ""
+}
+
+func collectLoadBalancerListenerConfigurations(ingress networkingv1.Ingress) []LoadBalancerListenerConfiguration {
+	configs := collectListenerConfigs(ingress)
+	certificates := collectCertificateARNs(ingress)
+	sslPolicy := strings.TrimSpace(ingress.Annotations[ALBSSLPolicyAnnotation])
+
+	listeners := make([]LoadBalancerListenerConfiguration, 0, len(configs))
+	for _, config := range configs {
+		listener := LoadBalancerListenerConfiguration{
+			Protocol: config.Protocol,
+			Port:     config.Port,
+		}
+
+		if config.Protocol == "HTTPS" {
+			listener.SSLPolicy = sslPolicy
+			listener.Certificates = certificates
+		}
+
+		listeners = append(listeners, listener)
+	}
+
+	return listeners
+}
+
+func collectCertificateARNs(ingress networkingv1.Ingress) []string {
+	value := strings.TrimSpace(ingress.Annotations[ALBCertificateARNAnnotation])
+	if value == "" {
+		return nil
+	}
+
+	parts := strings.Split(value, ",")
+	certificates := make([]string, 0, len(parts))
+	for _, part := range parts {
+		certificate := strings.TrimSpace(part)
+		if certificate == "" {
+			continue
+		}
+		certificates = append(certificates, certificate)
+	}
+
+	return certificates
 }
 
 func collectParentRefs(ingress networkingv1.Ingress, listeners []Listener) []ParentRef {
@@ -272,6 +350,7 @@ func collectRouteRules(ingress networkingv1.Ingress) []HTTPRouteRule {
 
 		for _, path := range ingressRule.HTTP.Paths {
 			rule := HTTPRouteRule{
+				Hostname:    ingressRule.Host,
 				Path:        path.Path,
 				PathType:    path.PathType,
 				BackendRefs: collectBackendRefs(path.Backend, targetType),

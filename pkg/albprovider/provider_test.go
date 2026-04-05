@@ -87,6 +87,10 @@ func TestBuildSummary(t *testing.T) {
 		t.Fatal("expected summary to include httpRoutes header")
 	}
 
+	if !strings.Contains(summary, "loadBalancerConfigurations:\n") {
+		t.Fatal("expected summary to include loadBalancerConfigurations header")
+	}
+
 	if !strings.Contains(summary, "- default/demo-one scheme= listeners=1\n") {
 		t.Fatal("expected summary to include first gateway")
 	}
@@ -101,5 +105,62 @@ func TestBuildSummary(t *testing.T) {
 
 	if !strings.Contains(summary, "- apps/demo-two hosts= parents=apps/demo-two#http rules=0\n") {
 		t.Fatal("expected summary to include second http route")
+	}
+}
+
+func TestBuildGatewayAPIResources(t *testing.T) {
+	provider := NewProvider()
+	provider.storage.AddIngresses([]networkingv1.Ingress{
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "demo-one",
+				Namespace: "default",
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "demo-two",
+				Namespace: "apps",
+			},
+		},
+	})
+
+	resources := provider.BuildGatewayAPIResources()
+
+	if len(resources.Gateways) != 2 {
+		t.Fatalf("got %d gateways, want 2", len(resources.Gateways))
+	}
+
+	if len(resources.HTTPRoutes) != 2 {
+		t.Fatalf("got %d http routes, want 2", len(resources.HTTPRoutes))
+	}
+}
+
+func TestBuildGatewayAPIYAML(t *testing.T) {
+	provider := NewProvider()
+	provider.storage.AddIngresses([]networkingv1.Ingress{
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "demo",
+				Namespace: "default",
+			},
+		},
+	})
+
+	rendered, err := provider.BuildGatewayAPIYAML()
+	if err != nil {
+		t.Fatalf("build gateway api yaml returned error: %v", err)
+	}
+
+	if !strings.Contains(rendered, "kind: Gateway\n") {
+		t.Fatal("expected rendered yaml to include a Gateway")
+	}
+
+	if !strings.Contains(rendered, "kind: HTTPRoute\n") {
+		t.Fatal("expected rendered yaml to include an HTTPRoute")
+	}
+
+	if !strings.Contains(rendered, "name: demo\n") {
+		t.Fatal("expected rendered yaml to include the ingress-derived name")
 	}
 }

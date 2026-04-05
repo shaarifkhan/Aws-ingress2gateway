@@ -1,6 +1,8 @@
 package gatewayapi
 
 import (
+	"strings"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -28,7 +30,7 @@ func ConvertModel(model albir.Model) Resources {
 	}
 
 	for _, route := range model.HTTPRoutes {
-		resources.HTTPRoutes = append(resources.HTTPRoutes, ConvertHTTPRoute(route))
+		resources.HTTPRoutes = append(resources.HTTPRoutes, ConvertHTTPRoutes(route)...)
 	}
 
 	return resources
@@ -54,21 +56,47 @@ func ConvertGateway(gateway albir.Gateway) gatewayv1.Gateway {
 
 // ConvertHTTPRoute converts one IR route into one typed Gateway API object.
 func ConvertHTTPRoute(route albir.HTTPRoute) gatewayv1.HTTPRoute {
+	return convertHTTPRouteWithRules(route.Name, route.Namespace, route.Hostnames, route.ParentRefs, route.Rules, route.Source)
+}
+
+// ConvertHTTPRoutes converts one IR route into one or more typed HTTPRoute objects.
+func ConvertHTTPRoutes(route albir.HTTPRoute) []gatewayv1.HTTPRoute {
+	groupedRules := groupRulesByHostname(route.Rules)
+	if len(groupedRules) <= 1 {
+		return []gatewayv1.HTTPRoute{ConvertHTTPRoute(route)}
+	}
+
+	routes := make([]gatewayv1.HTTPRoute, 0, len(groupedRules))
+	for _, group := range groupedRules {
+		routes = append(routes, convertHTTPRouteWithRules(
+			routeNameForHostname(route.Name, group.hostname),
+			route.Namespace,
+			hostnamesForGroup(group.hostname),
+			route.ParentRefs,
+			group.rules,
+			route.Source,
+		))
+	}
+
+	return routes
+}
+
+func convertHTTPRouteWithRules(name, namespace string, hostnames []string, parentRefs []albir.ParentRef, rules []albir.HTTPRouteRule, source *networkingv1.Ingress) gatewayv1.HTTPRoute {
 	return gatewayv1.HTTPRoute{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: gatewayv1.GroupVersion.String(),
 			Kind:       "HTTPRoute",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      route.Name,
-			Namespace: route.Namespace,
+			Name:      name,
+			Namespace: namespace,
 		},
 		Spec: gatewayv1.HTTPRouteSpec{
 			CommonRouteSpec: gatewayv1.CommonRouteSpec{
-				ParentRefs: convertParentRefs(route.ParentRefs),
+				ParentRefs: convertParentRefs(parentRefs),
 			},
-			Hostnames: convertHostnames(route.Hostnames),
-			Rules:     convertHTTPRouteRules(route.Rules),
+			Hostnames: convertHostnames(hostnames),
+			Rules:     convertHTTPRouteRules(rules),
 		},
 	}
 }
@@ -92,6 +120,48 @@ func convertListeners(listeners []albir.Listener) []gatewayv1.Listener {
 	}
 
 	return typed
+}
+
+type hostnameRuleGroup struct {
+	hostname string
+	rules    []albir.HTTPRouteRule
+}
+
+func groupRulesByHostname(rules []albir.HTTPRouteRule) []hostnameRuleGroup {
+	groups := make([]hostnameRuleGroup, 0)
+	indexByHostname := make(map[string]int)
+
+	for _, rule := range rules {
+		index, ok := indexByHostname[rule.Hostname]
+		if !ok {
+			index = len(groups)
+			indexByHostname[rule.Hostname] = index
+			groups = append(groups, hostnameRuleGroup{
+				hostname: rule.Hostname,
+				rules:    []albir.HTTPRouteRule{},
+			})
+		}
+		groups[index].rules = append(groups[index].rules, rule)
+	}
+
+	return groups
+}
+
+func hostnamesForGroup(hostname string) []string {
+	if hostname == "" {
+		return nil
+	}
+
+	return []string{hostname}
+}
+
+func routeNameForHostname(baseName, hostname string) string {
+	if hostname == "" {
+		return baseName + "-catchall"
+	}
+
+	replacer := strings.NewReplacer(".", "-", "*", "wildcard", "_", "-")
+	return baseName + "-" + replacer.Replace(hostname)
 }
 
 func convertHostnames(hostnames []string) []gatewayv1.Hostname {
