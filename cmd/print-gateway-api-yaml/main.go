@@ -11,6 +11,7 @@ import (
 
 func main() {
 	namespace := flag.String("namespace", "", "namespace to read ingresses from; empty means all namespaces")
+	ingressName := flag.String("ingress-name", "", "specific ingress to convert; empty means all ingresses")
 	flag.Parse()
 
 	provider := albprovider.NewProvider()
@@ -19,9 +20,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	rendered, err := provider.BuildGatewayAPIYAML()
+	provider.FilterStoredIngresses(*namespace, *ingressName)
+
+	rendered, err := provider.BuildCombinedYAML()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "render gateway api yaml: %v\n", err)
+		fmt.Fprintf(os.Stderr, "render combined yaml: %v\n", err)
 		os.Exit(1)
 	}
 

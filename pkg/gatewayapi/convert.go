@@ -3,8 +3,8 @@ package gatewayapi
 import (
 	"strings"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	"aws-ingress2gateway/pkg/albir"
@@ -25,8 +25,12 @@ func ConvertModel(model albir.Model) Resources {
 		HTTPRoutes: make([]gatewayv1.HTTPRoute, 0, len(model.HTTPRoutes)),
 	}
 
+	loadBalancerConfigByGateway := indexLoadBalancerConfigurations(model.LoadBalancerConfigurations)
+
 	for _, gateway := range model.Gateways {
-		resources.Gateways = append(resources.Gateways, ConvertGateway(gateway))
+		typedGateway := ConvertGateway(gateway)
+		attachLoadBalancerConfigurationRef(&typedGateway, loadBalancerConfigByGateway[gateway.Namespace+"/"+gateway.Name])
+		resources.Gateways = append(resources.Gateways, typedGateway)
 	}
 
 	for _, route := range model.HTTPRoutes {
@@ -162,6 +166,37 @@ func routeNameForHostname(baseName, hostname string) string {
 
 	replacer := strings.NewReplacer(".", "-", "*", "wildcard", "_", "-")
 	return baseName + "-" + replacer.Replace(hostname)
+}
+
+func indexLoadBalancerConfigurations(configurations []albir.LoadBalancerConfiguration) map[string]albir.LoadBalancerConfiguration {
+	indexed := make(map[string]albir.LoadBalancerConfiguration, len(configurations))
+
+	for _, configuration := range configurations {
+		if configuration.Source != nil {
+			indexed[configuration.Namespace+"/"+configuration.Source.Name] = configuration
+			continue
+		}
+
+		if strings.HasSuffix(configuration.Name, "-lb-config") {
+			indexed[configuration.Namespace+"/"+strings.TrimSuffix(configuration.Name, "-lb-config")] = configuration
+		}
+	}
+
+	return indexed
+}
+
+func attachLoadBalancerConfigurationRef(gateway *gatewayv1.Gateway, configuration albir.LoadBalancerConfiguration) {
+	if configuration.Name == "" {
+		return
+	}
+
+	gateway.Spec.Infrastructure = &gatewayv1.GatewayInfrastructure{
+		ParametersRef: &gatewayv1.LocalParametersReference{
+			Group: gatewayv1.Group("gateway.k8s.aws"),
+			Kind:  gatewayv1.Kind("LoadBalancerConfiguration"),
+			Name:  configuration.Name,
+		},
+	}
 }
 
 func convertHostnames(hostnames []string) []gatewayv1.Hostname {

@@ -27,13 +27,28 @@ func RenderSummary(model Model) string {
 
 	builder.WriteString("loadBalancerConfigurations:\n")
 	for _, config := range model.LoadBalancerConfigurations {
-		builder.WriteString(fmt.Sprintf("- %s/%s loadBalancerName=%s scheme=%s listeners=%d\n", config.Namespace, config.Name, config.LoadBalancerName, config.Scheme, len(config.Listeners)))
-		for _, listener := range config.Listeners {
-			builder.WriteString(fmt.Sprintf("  listener protocol=%s port=%d sslPolicy=%s certificates=%s\n", listener.Protocol, listener.Port, listener.SSLPolicy, strings.Join(listener.Certificates, ",")))
+		builder.WriteString(fmt.Sprintf("- %s/%s loadBalancerName=%s scheme=%s wafv2ACLARN=%s attributes=%s listenerConfigurations=%d\n", config.Namespace, config.Name, config.LoadBalancerName, config.Scheme, config.WAFv2ACLARN, renderLoadBalancerAttributes(config.LoadBalancerAttributes), len(config.ListenerConfigurations)))
+		for _, listener := range config.ListenerConfigurations {
+			builder.WriteString(fmt.Sprintf("  listenerConfiguration protocol=%s port=%d sslPolicy=%s certificates=%s\n", listener.Protocol, listener.Port, listener.SSLPolicy, strings.Join(listener.Certificates, ",")))
 		}
 	}
 
+	builder.WriteString("targetGroupConfigurations:\n")
+	for _, config := range model.TargetGroupConfigurations {
+		builder.WriteString(fmt.Sprintf("- %s/%s service=%s targetType=%s healthCheckPath=%s\n", config.Namespace, config.Name, config.ServiceName, config.TargetType, config.HealthCheckPath))
+	}
+
 	return builder.String()
+}
+
+func renderLoadBalancerAttributes(attributes []LoadBalancerAttribute) string {
+	parts := make([]string, 0, len(attributes))
+
+	for _, attribute := range attributes {
+		parts = append(parts, fmt.Sprintf("%s=%s", attribute.Key, attribute.Value))
+	}
+
+	return strings.Join(parts, ",")
 }
 
 func renderBackendRefs(backendRefs []BackendRef) string {

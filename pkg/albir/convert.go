@@ -11,9 +11,12 @@ import (
 const ALBListenPortsAnnotation = "alb.ingress.kubernetes.io/listen-ports"
 const ALBSchemeAnnotation = "alb.ingress.kubernetes.io/scheme"
 const ALBTargetTypeAnnotation = "alb.ingress.kubernetes.io/target-type"
+const ALBHealthCheckPathAnnotation = "alb.ingress.kubernetes.io/healthcheck-path"
 const ALBLoadBalancerNameAnnotation = "alb.ingress.kubernetes.io/load-balancer-name"
 const ALBCertificateARNAnnotation = "alb.ingress.kubernetes.io/certificate-arn"
 const ALBSSLPolicyAnnotation = "alb.ingress.kubernetes.io/ssl-policy"
+const ALBLoadBalancerAttributesAnnotation = "alb.ingress.kubernetes.io/load-balancer-attributes"
+const ALBWAFv2ACLARNAnnotation = "alb.ingress.kubernetes.io/wafv2-acl-arn"
 
 type listenerConfig struct {
 	Protocol string
@@ -28,6 +31,7 @@ func ConvertIngress(ingress networkingv1.Ingress) Model {
 	hostnames := collectHostnames(ingress)
 	listeners := collectListeners(ingress, hostnames)
 	loadBalancerConfiguration := collectLoadBalancerConfiguration(ingress)
+	targetGroupConfigurations := collectTargetGroupConfigurations(ingress)
 	httpRoute := HTTPRoute{
 		Name:       ingress.Name,
 		Namespace:  ingress.Namespace,
@@ -56,6 +60,10 @@ func ConvertIngress(ingress networkingv1.Ingress) Model {
 		model.LoadBalancerConfigurations = []LoadBalancerConfiguration{*loadBalancerConfiguration}
 	}
 
+	if len(targetGroupConfigurations) > 0 {
+		model.TargetGroupConfigurations = targetGroupConfigurations
+	}
+
 	return model
 }
 
@@ -65,6 +73,7 @@ func ConvertIngresses(ingresses []networkingv1.Ingress) Model {
 		Gateways:                   make([]Gateway, 0, len(ingresses)),
 		HTTPRoutes:                 make([]HTTPRoute, 0, len(ingresses)),
 		LoadBalancerConfigurations: make([]LoadBalancerConfiguration, 0, len(ingresses)),
+		TargetGroupConfigurations:  make([]TargetGroupConfiguration, 0, len(ingresses)),
 	}
 
 	for _, ingress := range ingresses {
@@ -72,6 +81,7 @@ func ConvertIngresses(ingresses []networkingv1.Ingress) Model {
 		model.Gateways = append(model.Gateways, converted.Gateways...)
 		model.HTTPRoutes = append(model.HTTPRoutes, converted.HTTPRoutes...)
 		model.LoadBalancerConfigurations = append(model.LoadBalancerConfigurations, converted.LoadBalancerConfigurations...)
+		model.TargetGroupConfigurations = append(model.TargetGroupConfigurations, converted.TargetGroupConfigurations...)
 	}
 
 	return model
@@ -84,44 +94,106 @@ func collectLoadBalancerConfiguration(ingress networkingv1.Ingress) *LoadBalance
 
 	ingressCopy := ingress
 	return &LoadBalancerConfiguration{
-		Name:             ingress.Name + "-lb-config",
-		Namespace:        ingress.Namespace,
-		LoadBalancerName: strings.TrimSpace(ingress.Annotations[ALBLoadBalancerNameAnnotation]),
-		Scheme:           collectScheme(ingress),
-		Listeners:        collectLoadBalancerListenerConfigurations(ingress),
-		Source:           &ingressCopy,
+		Name:                   ingress.Name + "-lb-config",
+		Namespace:              ingress.Namespace,
+		LoadBalancerName:       strings.TrimSpace(ingress.Annotations[ALBLoadBalancerNameAnnotation]),
+		Scheme:                 collectScheme(ingress),
+		LoadBalancerAttributes: collectLoadBalancerAttributes(ingress),
+		WAFv2ACLARN:            strings.TrimSpace(ingress.Annotations[ALBWAFv2ACLARNAnnotation]),
+		ListenerConfigurations: collectLoadBalancerListenerConfigurations(ingress),
+		Source:                 &ingressCopy,
 	}
 }
 
 func hasLoadBalancerConfigurationInput(ingress networkingv1.Ingress) bool {
 	return strings.TrimSpace(ingress.Annotations[ALBLoadBalancerNameAnnotation]) != "" ||
 		strings.TrimSpace(ingress.Annotations[ALBSchemeAnnotation]) != "" ||
-		strings.TrimSpace(ingress.Annotations[ALBListenPortsAnnotation]) != "" ||
 		strings.TrimSpace(ingress.Annotations[ALBCertificateARNAnnotation]) != "" ||
-		strings.TrimSpace(ingress.Annotations[ALBSSLPolicyAnnotation]) != ""
+		strings.TrimSpace(ingress.Annotations[ALBSSLPolicyAnnotation]) != "" ||
+		strings.TrimSpace(ingress.Annotations[ALBLoadBalancerAttributesAnnotation]) != "" ||
+		strings.TrimSpace(ingress.Annotations[ALBWAFv2ACLARNAnnotation]) != ""
 }
 
 func collectLoadBalancerListenerConfigurations(ingress networkingv1.Ingress) []LoadBalancerListenerConfiguration {
+	if strings.TrimSpace(ingress.Annotations[ALBCertificateARNAnnotation]) == "" &&
+		strings.TrimSpace(ingress.Annotations[ALBSSLPolicyAnnotation]) == "" {
+		return nil
+	}
+
 	configs := collectListenerConfigs(ingress)
 	certificates := collectCertificateARNs(ingress)
 	sslPolicy := strings.TrimSpace(ingress.Annotations[ALBSSLPolicyAnnotation])
 
 	listeners := make([]LoadBalancerListenerConfiguration, 0, len(configs))
 	for _, config := range configs {
+		if config.Protocol != "HTTPS" {
+			continue
+		}
+
 		listener := LoadBalancerListenerConfiguration{
 			Protocol: config.Protocol,
 			Port:     config.Port,
 		}
 
-		if config.Protocol == "HTTPS" {
-			listener.SSLPolicy = sslPolicy
-			listener.Certificates = certificates
-		}
+		listener.SSLPolicy = sslPolicy
+		listener.Certificates = certificates
 
 		listeners = append(listeners, listener)
 	}
 
 	return listeners
+}
+
+func collectTargetGroupConfigurations(ingress networkingv1.Ingress) []TargetGroupConfiguration {
+	targetType := collectTargetType(ingress)
+	healthCheckPath := strings.TrimSpace(ingress.Annotations[ALBHealthCheckPathAnnotation])
+	if targetType == "" && healthCheckPath == "" {
+		return nil
+	}
+
+	serviceNames := collectBackendServiceNames(ingress)
+	configurations := make([]TargetGroupConfiguration, 0, len(serviceNames))
+
+	for _, serviceName := range serviceNames {
+		ingressCopy := ingress
+		configurations = append(configurations, TargetGroupConfiguration{
+			Name:            serviceName + "-tg-config",
+			Namespace:       ingress.Namespace,
+			ServiceName:     serviceName,
+			TargetType:      targetType,
+			HealthCheckPath: healthCheckPath,
+			Source:          &ingressCopy,
+		})
+	}
+
+	return configurations
+}
+
+func collectBackendServiceNames(ingress networkingv1.Ingress) []string {
+	serviceNames := make([]string, 0)
+	seen := make(map[string]struct{})
+
+	for _, ingressRule := range ingress.Spec.Rules {
+		if ingressRule.HTTP == nil {
+			continue
+		}
+
+		for _, path := range ingressRule.HTTP.Paths {
+			if path.Backend.Service == nil || path.Backend.Service.Name == "" {
+				continue
+			}
+
+			serviceName := path.Backend.Service.Name
+			if _, ok := seen[serviceName]; ok {
+				continue
+			}
+
+			serviceNames = append(serviceNames, serviceName)
+			seen[serviceName] = struct{}{}
+		}
+	}
+
+	return serviceNames
 }
 
 func collectCertificateARNs(ingress networkingv1.Ingress) []string {
@@ -141,6 +213,39 @@ func collectCertificateARNs(ingress networkingv1.Ingress) []string {
 	}
 
 	return certificates
+}
+
+func collectLoadBalancerAttributes(ingress networkingv1.Ingress) []LoadBalancerAttribute {
+	value := strings.TrimSpace(ingress.Annotations[ALBLoadBalancerAttributesAnnotation])
+	if value == "" {
+		return nil
+	}
+
+	parts := strings.Split(value, ",")
+	attributes := make([]LoadBalancerAttribute, 0, len(parts))
+	for _, part := range parts {
+		entry := strings.TrimSpace(part)
+		if entry == "" {
+			continue
+		}
+
+		keyValue := strings.SplitN(entry, "=", 2)
+		if len(keyValue) != 2 {
+			continue
+		}
+
+		key := strings.TrimSpace(keyValue[0])
+		if key == "" {
+			continue
+		}
+
+		attributes = append(attributes, LoadBalancerAttribute{
+			Key:   key,
+			Value: strings.TrimSpace(keyValue[1]),
+		})
+	}
+
+	return attributes
 }
 
 func collectParentRefs(ingress networkingv1.Ingress, listeners []Listener) []ParentRef {

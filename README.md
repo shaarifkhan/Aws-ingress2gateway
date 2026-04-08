@@ -5,7 +5,7 @@ Ingress to Gateway converter step by step.
 
 ## Current step
 
-Step 1 through step 20:
+Step 1 through step 23:
 
 - load Kubernetes client configuration from the local environment
 - create a controller-runtime client
@@ -27,6 +27,9 @@ Step 1 through step 20:
 - improve typed manifest fidelity by splitting routes per hostname and carrying AWS annotations forward
 - add a tiny CLI that prints provider-generated Gateway API YAML
 - add initial `LoadBalancerConfiguration` IR for LB-focused ingress annotations
+- add initial `TargetGroupConfiguration` IR for target type and health check path
+- convert load balancer and target group IR into typed AWS Gateway customization CRDs
+- map ALB load balancer attributes and WAFv2 ACL into load balancer IR and typed AWS CRDs
 
 Current IR shape:
 
@@ -39,6 +42,7 @@ Current IR shape:
 - `BackendRef`
 - `LoadBalancerConfiguration`
 - `LoadBalancerListenerConfiguration`
+- `TargetGroupConfiguration`
 - link back to the source `Ingress`
 - basic HTTP listener data on the gateway side
 - basic HTTPS listener data when ingress TLS is present
@@ -51,8 +55,13 @@ Current IR shape:
 - multi-document YAML output from the typed Gateway API objects
 - provider methods for end-to-end Gateway API resources and YAML
 - hostname-aware `HTTPRoute` splitting in typed Gateway API output
-- a tiny demo CLI that prints generated Gateway API YAML
-- initial load balancer configuration IR for name, scheme, listener ports, certs, and SSL policy
+- a tiny demo CLI that prints generated Gateway API YAML plus AWS customization CRD YAML
+- initial load balancer configuration IR for name, scheme, and listener configurations like certs and SSL policy
+- load balancer attribute capture from `alb.ingress.kubernetes.io/load-balancer-attributes`
+- WAFv2 ACL capture from `alb.ingress.kubernetes.io/wafv2-acl-arn`
+- initial target group configuration IR for service-level target type and health check path
+- typed AWS Gateway customization CRDs built from the current load balancer and target group IR
+- generated `Gateway.spec.infrastructure.parametersRef` pointing at typed `LoadBalancerConfiguration`
 
 Current demo command:
 
@@ -60,8 +69,14 @@ Current demo command:
 GOMODCACHE="$(pwd)/.gomodcache" GOSUMDB=off go run ./cmd/print-gateway-api-yaml --namespace default
 ```
 
+Optional flags:
+
+- `--namespace default` converts all ALB ingresses in one namespace
+- `--ingress-name demo` converts the named ALB ingress across all namespaces
+- `--namespace default --ingress-name demo` converts one named ALB ingress in one namespace
+- no flags converts all ALB ingresses
+
 Not implemented yet:
 
-- typed AWS Gateway customization CRDs from the new load balancer config IR
 - default backend handling and more advanced ALB-specific annotations
 - richer manifest fidelity beyond hostname splitting and basic typed field mapping

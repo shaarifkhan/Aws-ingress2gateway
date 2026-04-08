@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	networkingv1 "k8s.io/api/networking/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	"aws-ingress2gateway/pkg/albir"
@@ -134,12 +135,30 @@ func TestConvertModel(t *testing.T) {
 			{
 				Name:      "demo-gateway",
 				Namespace: "default",
+				Source: &networkingv1.Ingress{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "demo-gateway",
+						Namespace: "default",
+					},
+				},
 			},
 		},
 		HTTPRoutes: []albir.HTTPRoute{
 			{
 				Name:      "demo-route",
 				Namespace: "default",
+			},
+		},
+		LoadBalancerConfigurations: []albir.LoadBalancerConfiguration{
+			{
+				Name:      "demo-gateway-lb-config",
+				Namespace: "default",
+				Source: &networkingv1.Ingress{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:      "demo-gateway",
+						Namespace: "default",
+					},
+				},
 			},
 		},
 	}
@@ -152,6 +171,14 @@ func TestConvertModel(t *testing.T) {
 
 	if len(resources.HTTPRoutes) != 1 {
 		t.Fatalf("got %d http routes, want 1", len(resources.HTTPRoutes))
+	}
+
+	if resources.Gateways[0].Spec.Infrastructure == nil || resources.Gateways[0].Spec.Infrastructure.ParametersRef == nil {
+		t.Fatal("expected gateway infrastructure parametersRef to be set")
+	}
+
+	if resources.Gateways[0].Spec.Infrastructure.ParametersRef.Name != "demo-gateway-lb-config" {
+		t.Fatalf("gateway parametersRef name = %q, want demo-gateway-lb-config", resources.Gateways[0].Spec.Infrastructure.ParametersRef.Name)
 	}
 }
 

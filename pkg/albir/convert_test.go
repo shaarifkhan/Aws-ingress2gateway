@@ -59,8 +59,20 @@ func TestConvertIngress(t *testing.T) {
 		t.Fatalf("got %d load balancer configurations, want 1", len(model.LoadBalancerConfigurations))
 	}
 
+	if len(model.TargetGroupConfigurations) != 1 {
+		t.Fatalf("got %d target group configurations, want 1", len(model.TargetGroupConfigurations))
+	}
+
 	if model.LoadBalancerConfigurations[0].Scheme != "internet-facing" {
 		t.Fatalf("load balancer config scheme = %q, want internet-facing", model.LoadBalancerConfigurations[0].Scheme)
+	}
+
+	if model.TargetGroupConfigurations[0].ServiceName != "demo-service" {
+		t.Fatalf("target group service = %q, want demo-service", model.TargetGroupConfigurations[0].ServiceName)
+	}
+
+	if model.TargetGroupConfigurations[0].TargetType != "ip" {
+		t.Fatalf("target group target type = %q, want ip", model.TargetGroupConfigurations[0].TargetType)
 	}
 
 	gateway := model.Gateways[0]
@@ -167,6 +179,10 @@ func TestConvertIngresses(t *testing.T) {
 		t.Fatalf("got %d load balancer configurations, want 0", len(model.LoadBalancerConfigurations))
 	}
 
+	if len(model.TargetGroupConfigurations) != 0 {
+		t.Fatalf("got %d target group configurations, want 0", len(model.TargetGroupConfigurations))
+	}
+
 	if model.Gateways[0].Name != "demo-one" || model.Gateways[1].Name != "demo-two" {
 		t.Fatal("expected gateways to preserve ingress ordering")
 	}
@@ -186,11 +202,13 @@ func TestConvertIngressCollectsLoadBalancerConfiguration(t *testing.T) {
 			Name:      "demo",
 			Namespace: "default",
 			Annotations: map[string]string{
-				ALBLoadBalancerNameAnnotation: "demo-alb",
-				ALBSchemeAnnotation:           "internet-facing",
-				ALBListenPortsAnnotation:      `[{"HTTP":8080},{"HTTPS":8443}]`,
-				ALBCertificateARNAnnotation:   "arn:aws:acm:region:acct:cert/one, arn:aws:acm:region:acct:cert/two",
-				ALBSSLPolicyAnnotation:        "ELBSecurityPolicy-TLS13-1-2-2021-06",
+				ALBLoadBalancerNameAnnotation:       "demo-alb",
+				ALBSchemeAnnotation:                 "internet-facing",
+				ALBListenPortsAnnotation:            `[{"HTTP":8080},{"HTTPS":8443}]`,
+				ALBCertificateARNAnnotation:         "arn:aws:acm:region:acct:cert/one, arn:aws:acm:region:acct:cert/two",
+				ALBSSLPolicyAnnotation:              "ELBSecurityPolicy-TLS13-1-2-2021-06",
+				ALBLoadBalancerAttributesAnnotation: "idle_timeout.timeout_seconds=60, routing.http2.enabled=true, invalid-entry",
+				ALBWAFv2ACLARNAnnotation:            "arn:aws:wafv2:region:acct:regional/webacl/demo/123",
 			},
 		},
 	}
@@ -214,24 +232,114 @@ func TestConvertIngressCollectsLoadBalancerConfiguration(t *testing.T) {
 		t.Fatalf("scheme = %q, want internet-facing", config.Scheme)
 	}
 
-	if len(config.Listeners) != 2 {
-		t.Fatalf("got %d load balancer listeners, want 2", len(config.Listeners))
+	if config.WAFv2ACLARN != "arn:aws:wafv2:region:acct:regional/webacl/demo/123" {
+		t.Fatalf("wafv2 acl arn = %q, want demo arn", config.WAFv2ACLARN)
 	}
 
-	if config.Listeners[0].Protocol != "HTTP" || config.Listeners[0].Port != 8080 {
-		t.Fatalf("first lb listener = %#v, want HTTP:8080", config.Listeners[0])
+	if len(config.LoadBalancerAttributes) != 2 {
+		t.Fatalf("got %d load balancer attributes, want 2", len(config.LoadBalancerAttributes))
 	}
 
-	if config.Listeners[1].Protocol != "HTTPS" || config.Listeners[1].Port != 8443 {
-		t.Fatalf("second lb listener = %#v, want HTTPS:8443", config.Listeners[1])
+	if config.LoadBalancerAttributes[0].Key != "idle_timeout.timeout_seconds" || config.LoadBalancerAttributes[0].Value != "60" {
+		t.Fatalf("first load balancer attribute = %#v, want idle_timeout.timeout_seconds=60", config.LoadBalancerAttributes[0])
 	}
 
-	if config.Listeners[1].SSLPolicy != "ELBSecurityPolicy-TLS13-1-2-2021-06" {
-		t.Fatalf("ssl policy = %q, want ELBSecurityPolicy-TLS13-1-2-2021-06", config.Listeners[1].SSLPolicy)
+	if config.LoadBalancerAttributes[1].Key != "routing.http2.enabled" || config.LoadBalancerAttributes[1].Value != "true" {
+		t.Fatalf("second load balancer attribute = %#v, want routing.http2.enabled=true", config.LoadBalancerAttributes[1])
 	}
 
-	if len(config.Listeners[1].Certificates) != 2 {
-		t.Fatalf("got %d certificates, want 2", len(config.Listeners[1].Certificates))
+	if len(config.ListenerConfigurations) != 1 {
+		t.Fatalf("got %d listener configurations, want 1", len(config.ListenerConfigurations))
+	}
+
+	if config.ListenerConfigurations[0].Protocol != "HTTPS" || config.ListenerConfigurations[0].Port != 8443 {
+		t.Fatalf("listener configuration = %#v, want HTTPS:8443", config.ListenerConfigurations[0])
+	}
+
+	if config.ListenerConfigurations[0].SSLPolicy != "ELBSecurityPolicy-TLS13-1-2-2021-06" {
+		t.Fatalf("ssl policy = %q, want ELBSecurityPolicy-TLS13-1-2-2021-06", config.ListenerConfigurations[0].SSLPolicy)
+	}
+
+	if len(config.ListenerConfigurations[0].Certificates) != 2 {
+		t.Fatalf("got %d certificates, want 2", len(config.ListenerConfigurations[0].Certificates))
+	}
+}
+
+func TestConvertIngressCollectsTargetGroupConfigurations(t *testing.T) {
+	pathType := networkingv1.PathTypePrefix
+	ingress := networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "demo",
+			Namespace: "default",
+			Annotations: map[string]string{
+				ALBTargetTypeAnnotation:      "instance",
+				ALBHealthCheckPathAnnotation: "/healthz",
+			},
+		},
+		Spec: networkingv1.IngressSpec{
+			Rules: []networkingv1.IngressRule{
+				{
+					Host: "demo.example.com",
+					IngressRuleValue: networkingv1.IngressRuleValue{
+						HTTP: &networkingv1.HTTPIngressRuleValue{
+							Paths: []networkingv1.HTTPIngressPath{
+								{
+									Path:     "/",
+									PathType: &pathType,
+									Backend: networkingv1.IngressBackend{
+										Service: &networkingv1.IngressServiceBackend{
+											Name: "demo-service",
+											Port: networkingv1.ServiceBackendPort{Number: 80},
+										},
+									},
+								},
+								{
+									Path:     "/admin",
+									PathType: &pathType,
+									Backend: networkingv1.IngressBackend{
+										Service: &networkingv1.IngressServiceBackend{
+											Name: "admin-service",
+											Port: networkingv1.ServiceBackendPort{Number: 8080},
+										},
+									},
+								},
+								{
+									Path:     "/repeat",
+									PathType: &pathType,
+									Backend: networkingv1.IngressBackend{
+										Service: &networkingv1.IngressServiceBackend{
+											Name: "demo-service",
+											Port: networkingv1.ServiceBackendPort{Number: 80},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	model := ConvertIngress(ingress)
+
+	if len(model.TargetGroupConfigurations) != 2 {
+		t.Fatalf("got %d target group configurations, want 2", len(model.TargetGroupConfigurations))
+	}
+
+	first := model.TargetGroupConfigurations[0]
+	second := model.TargetGroupConfigurations[1]
+
+	if first.Name != "demo-service-tg-config" || first.ServiceName != "demo-service" {
+		t.Fatalf("first target group config = %#v, want demo-service target group config", first)
+	}
+
+	if first.TargetType != "instance" || first.HealthCheckPath != "/healthz" {
+		t.Fatalf("first target group settings = %#v, want instance and /healthz", first)
+	}
+
+	if second.Name != "admin-service-tg-config" || second.ServiceName != "admin-service" {
+		t.Fatalf("second target group config = %#v, want admin-service target group config", second)
 	}
 }
 
@@ -334,7 +442,8 @@ func TestConvertIngressIgnoresUnknownTargetType(t *testing.T) {
 			Name:      "demo",
 			Namespace: "default",
 			Annotations: map[string]string{
-				ALBTargetTypeAnnotation: "something-else",
+				ALBTargetTypeAnnotation:      "something-else",
+				ALBHealthCheckPathAnnotation: "/healthz",
 			},
 		},
 		Spec: networkingv1.IngressSpec{
@@ -372,6 +481,18 @@ func TestConvertIngressIgnoresUnknownTargetType(t *testing.T) {
 
 	if model.HTTPRoutes[0].Rules[0].BackendRefs[0].TargetType != "" {
 		t.Fatalf("backend target type = %q, want empty string", model.HTTPRoutes[0].Rules[0].BackendRefs[0].TargetType)
+	}
+
+	if len(model.TargetGroupConfigurations) != 1 {
+		t.Fatalf("got %d target group configurations, want 1", len(model.TargetGroupConfigurations))
+	}
+
+	if model.TargetGroupConfigurations[0].TargetType != "" {
+		t.Fatalf("target group target type = %q, want empty string", model.TargetGroupConfigurations[0].TargetType)
+	}
+
+	if model.TargetGroupConfigurations[0].HealthCheckPath != "/healthz" {
+		t.Fatalf("health check path = %q, want /healthz", model.TargetGroupConfigurations[0].HealthCheckPath)
 	}
 }
 
@@ -786,11 +907,12 @@ func TestRenderSummary(t *testing.T) {
 				Namespace:        "default",
 				LoadBalancerName: "demo-alb",
 				Scheme:           "internet-facing",
-				Listeners: []LoadBalancerListenerConfiguration{
-					{
-						Protocol: "HTTP",
-						Port:     80,
-					},
+				LoadBalancerAttributes: []LoadBalancerAttribute{
+					{Key: "idle_timeout.timeout_seconds", Value: "60"},
+					{Key: "routing.http2.enabled", Value: "true"},
+				},
+				WAFv2ACLARN: "arn:aws:wafv2:region:acct:regional/webacl/demo/123",
+				ListenerConfigurations: []LoadBalancerListenerConfiguration{
 					{
 						Protocol:     "HTTPS",
 						Port:         443,
@@ -800,10 +922,19 @@ func TestRenderSummary(t *testing.T) {
 				},
 			},
 		},
+		TargetGroupConfigurations: []TargetGroupConfiguration{
+			{
+				Name:            "demo-service-tg-config",
+				Namespace:       "default",
+				ServiceName:     "demo-service",
+				TargetType:      "ip",
+				HealthCheckPath: "/healthz",
+			},
+		},
 	}
 
 	got := RenderSummary(model)
-	want := "gateways:\n- default/demo-gateway scheme=internet-facing listeners=2\n  listener=http protocol=HTTP port=80 hostname=demo.example.com\n  listener=https protocol=HTTPS port=443 hostname=demo.example.com\nhttpRoutes:\n- default/demo-route hosts=demo.example.com parents=default/demo-gateway#http,default/demo-gateway#https rules=1\n  path=/ backend=demo-service:80 targetType=ip\nloadBalancerConfigurations:\n- default/demo-lb-config loadBalancerName=demo-alb scheme=internet-facing listeners=2\n  listener protocol=HTTP port=80 sslPolicy= certificates=\n  listener protocol=HTTPS port=443 sslPolicy=ELBSecurityPolicy-2016-08 certificates=arn:one,arn:two\n"
+	want := "gateways:\n- default/demo-gateway scheme=internet-facing listeners=2\n  listener=http protocol=HTTP port=80 hostname=demo.example.com\n  listener=https protocol=HTTPS port=443 hostname=demo.example.com\nhttpRoutes:\n- default/demo-route hosts=demo.example.com parents=default/demo-gateway#http,default/demo-gateway#https rules=1\n  path=/ backend=demo-service:80 targetType=ip\nloadBalancerConfigurations:\n- default/demo-lb-config loadBalancerName=demo-alb scheme=internet-facing wafv2ACLARN=arn:aws:wafv2:region:acct:regional/webacl/demo/123 attributes=idle_timeout.timeout_seconds=60,routing.http2.enabled=true listenerConfigurations=1\n  listenerConfiguration protocol=HTTPS port=443 sslPolicy=ELBSecurityPolicy-2016-08 certificates=arn:one,arn:two\ntargetGroupConfigurations:\n- default/demo-service-tg-config service=demo-service targetType=ip healthCheckPath=/healthz\n"
 
 	if got != want {
 		t.Fatalf("render summary = %q, want %q", got, want)
