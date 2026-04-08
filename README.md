@@ -69,5 +69,5 @@ The CLI prints combined YAML for:
 
 - Gateway API `Gateway`
 - Gateway API `HTTPRoute`
-- AWS load balancer customization resources
-- AWS target group customization resources
+- AWS load balancer customization resources `LoadBalancerConfiguration`
+- AWS target group customization resources `TargetGroupConfiguration`
